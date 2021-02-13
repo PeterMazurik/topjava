@@ -1,46 +1,85 @@
 package ru.javawebinar.topjava.repository.inmemory;
 
+import org.springframework.stereotype.Repository;
 import ru.javawebinar.topjava.model.Meal;
 import ru.javawebinar.topjava.repository.MealRepository;
+import ru.javawebinar.topjava.util.DateTimeUtil;
 import ru.javawebinar.topjava.util.MealsUtil;
+import ru.javawebinar.topjava.web.SecurityUtil;
 
-import java.util.Collection;
-import java.util.Map;
+import java.time.LocalDate;
+import java.time.LocalTime;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
 
+@Repository
 public class InMemoryMealRepository implements MealRepository {
     private final Map<Integer, Meal> repository = new ConcurrentHashMap<>();
     private final AtomicInteger counter = new AtomicInteger(0);
 
+    int authorisedUserId = SecurityUtil.authUserId();
+
     {
         MealsUtil.meals.forEach(this::save);
+    }
+
+    public void setAuthorisedUserId(int authorisedUserId) {
+        this.authorisedUserId = authorisedUserId;
     }
 
     @Override
     public Meal save(Meal meal) {
         if (meal.isNew()) {
             meal.setId(counter.incrementAndGet());
+            meal.setUserId(authorisedUserId);
             repository.put(meal.getId(), meal);
             return meal;
         }
         // handle case: update, but not present in storage
-        return repository.computeIfPresent(meal.getId(), (id, oldMeal) -> meal);
+        if (meal.getUserId().equals(authorisedUserId)) {
+            return repository.computeIfPresent(meal.getId(), (id, oldMeal) -> meal);
+        }
+
+        return null;
     }
 
     @Override
     public boolean delete(int id) {
-        return repository.remove(id) != null;
+        return repository.get(id).getUserId().equals(authorisedUserId) && repository.remove(id) != null;
     }
 
     @Override
     public Meal get(int id) {
-        return repository.get(id);
+        return repository.get(id).getUserId().equals(authorisedUserId) ? repository.get(id) : null;
     }
 
     @Override
-    public Collection<Meal> getAll() {
-        return repository.values();
+    public List<Meal> getAll() {
+        List<Meal> result = new ArrayList<>();
+        for (Meal meal : repository.values()) {
+            if (meal.getUserId().equals(authorisedUserId)) {
+                result.add(meal);
+            }
+        }
+        result.sort(Comparator.comparing(Meal::getDateTime).reversed());
+
+        return result;
+
     }
+
+    //Standby
+    @Override
+    public List<Meal> filter(LocalDate startDate, LocalTime startTime, LocalDate endDate, LocalTime endTime) {
+        List<Meal> result = new ArrayList<>();
+
+        result = repository.values().stream()
+                .filter(meal -> DateTimeUtil.isBetweenHalfOpen(meal.getTime(), startTime, endTime))
+                .collect(Collectors.toList());
+
+        return result;
+    }
+
 }
 
